@@ -1,0 +1,153 @@
+<?php
+/**
+  * Create payment plans by mapping a level to discount codes representing payment plan options.
+  * Useful for offering multiple pricing structures for membership (1, 2, 3 year memberships)
+  *
+  * Add this code below to your PMPro Customizations Plugin - https://www.paidmembershipspro.com/create-a-plugin-for-pmpro-customizations/
+  */
+
+global $pmpro_payment_plans;
+
+// Define the payment plans. Membership levels with the ID of 1, 2, 3, 4 can be paid using discount codes with the ID 4, 2 and 3
+$pmpro_payment_plans = array(
+	'1' => array( 4, 2, 3 ),
+	'2' => array( 4, 2, 3 ),
+	'3' => array( 4, 2, 3 ),
+	'4' => array( 4, 2, 3 ),
+);
+
+
+// Show the "Select a Payment Plan" box with options at checkout.
+function my_pmpro_payment_plan_checkout_boxes() {
+	global $pmpro_payment_plans, $wpdb;
+	if ( empty( $_REQUEST['level'] ) || empty( $_REQUEST['discount_code'] ) ) {
+		return;
+	}
+
+	$level_id         = $_REQUEST['level'];
+	$discount_code    = $_REQUEST['discount_code'];
+	$discount_code_id = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $wpdb->pmpro_discount_codes WHERE code=%s LIMIT 1", $discount_code ) );
+
+	
+	// Make sure passed discount code is valid.
+	if ( ! pmpro_checkDiscountCode( $discount_code, $level_id ) ) {
+		return;
+	}
+	// Group doesn't have a payment plan or using a different discount code? return.
+	if ( empty( $pmpro_payment_plans ) || ! isset( $pmpro_payment_plans[ $level_id ] ) ) {
+		return;
+	}
+
+	// Get payment options.
+	$payment_options = $pmpro_payment_plans[ $level_id ];
+	if ( ! is_array( $payment_options ) ) {
+		$payment_options = array( $payment_options );
+	}
+
+	
+	// Make sure discount code is a payment option.
+	if ( ! in_array( $discount_code_id, $payment_options ) ) {
+		return;
+	}
+
+	
+	// Create payment plan box.
+	?>
+	<div id="pmpro_level_options" class="pmpro_checkout">
+	   	<h3><span class="pmpro_checkout-h3-name"><?php esc_attr_e( 'If you would like to change the number of membership years,  select one of the following:', 'paid-memberships-pro' ); ?></span></h3> 
+		<div class="pmpro_checkout-fields">
+			<div class="pmpro_checkout-field pmpro_checkout-field-radio">
+				<?php
+				foreach ( $payment_options as $payment_option ) {
+					// Make sure discount code is valid.
+					if ( ! pmpro_checkDiscountCode( $wpdb->get_var( $wpdb->prepare( "SELECT code FROM $wpdb->pmpro_discount_codes WHERE id=%d LIMIT 1", $payment_option ) ), $level_id ) ) {
+						continue;
+					}
+
+					// Get discount code infomation.
+					$sql_query = "SELECT * FROM $wpdb->pmpro_discount_codes_levels WHERE code_id = '" . $payment_option . "' AND level_id = '" . (int) $level_id . "' LIMIT 1";
+					$payment_plan_level = $wpdb->get_row( $sql_query );
+					$sql_query = "SELECT code FROM $wpdb->pmpro_discount_codes WHERE id = '" . $payment_option . "'  LIMIT 1";
+					$code_name = $wpdb->get_row( $sql_query )->code;
+
+					// Apply filters.
+					$payment_plan_level = apply_filters( 'pmpro_checkout_level', $payment_plan_level );
+					?>
+					<div class="pmpro_checkout-field-radio-item">
+						<input type="radio" id="pmpro_code_<?php echo $payment_option; ?>" class="my_pmpro_payment_plan_option" name="my_pmpro_payment_plan_option" value="<?php echo $code_name; ?>" <?php checked( $payment_option == $discount_code_id ); ?> >
+						<label class="pmpro_label-inline" for="pmpro_code_<?php echo $payment_option; ?>" /><?php echo pmpro_getLevelCost( $payment_plan_level, false, true );?></label>
+					</div>
+					<?php
+				}
+				?>
+			</div>
+		</div>
+	</div>
+	<script>
+	jQuery(document).ready(function() {			
+
+		// Prevent changing discount code manually
+		jQuery('#other_discount_code_p').wrap("<div id='other_discount_code_p_hidden' style='display: none;'></div>");
+
+		// Hide 'discount code updated' message in level cost text on first page load.
+		if( jQuery ( "#pmpro_level_cost p" ).length > 1) {
+			jQuery('#pmpro_level_cost p').first().hide();
+		}
+
+		// Update discount code when different payment plan is chosen
+		jQuery('.my_pmpro_payment_plan_option').click(function() {
+			// Get chosen payment plan
+			code = jQuery('.my_pmpro_payment_plan_option:checked').val();
+			// Set corresponding discount code
+			jQuery( '#other_discount_code' ).val( code );
+			// Update discount code
+			jQuery('#other_discount_code_button').click();
+		});
+
+		// Save original checkout message
+		pmpro_original_message = jQuery('#pmpro_message')[0].outerHTML;
+		// After any AJAX call...
+		jQuery( document ).ajaxComplete(function() {
+			// If the current discount code was updated...
+			if( jQuery ( "#pmpro_level_cost p" ).length > 1) {
+				// Hide 'discount code updated' message in level cost text
+				jQuery('#pmpro_level_cost p').first().hide();
+				// Restore the original checkout message
+				jQuery('#pmpro_message')[0].outerHTML = pmpro_original_message;
+			}
+		});
+	});
+	</script>
+	<?php
+}
+//add_action( 'pmpro_checkout_boxes', 'my_pmpro_payment_plan_checkout_boxes' );
+add_action( 'pmpro_checkout_after_level_cost', 'my_pmpro_payment_plan_checkout_boxes', 5 );
+function my_pmpro_automatically_give_payment_plan() {
+	global $pmpro_payment_plans, $wpdb;
+
+	// Make sure that there is a level and not already a discount code.
+	if ( empty( $_REQUEST['level'] ) || ! empty( $_REQUEST['discount_code'] ) ) {
+		return;
+	}
+	$level_id = $_REQUEST['level'];
+
+	// Group doesn't have a payment plan? return.
+	if ( empty( $pmpro_payment_plans ) || ! isset( $pmpro_payment_plans[ $level_id ] ) ) {
+		return;
+	}
+
+	// Get payment plan.
+	$payment_plans = $pmpro_payment_plans[ $level_id ];
+	if ( ! is_array( $payment_plans ) ) {
+		$payment_plans = array( $payment_plans );
+	}
+
+	// Give starting payment plan (aka a discount code).
+	if ( ! empty( $payment_plans ) ) {
+		$code = $wpdb->get_var( $wpdb->prepare( "SELECT code FROM $wpdb->pmpro_discount_codes WHERE id=%d LIMIT 1", $payment_plans[0] ) );
+		if ( pmpro_checkDiscountCode( $code, $level_id ) ) {
+			$_REQUEST['discount_code'] = $code;
+		}
+	}
+}
+add_action( 'init', 'my_pmpro_automatically_give_payment_plan' );
